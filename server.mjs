@@ -80,7 +80,7 @@ function sendJson(res,status,data){res.writeHead(status,{'Content-Type':'applica
 function checkRate(req){const ip=String(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').split(',')[0].trim().slice(0,80);const current=Date.now();const v=rate.get(ip)||{since:current,n:0};if(current-v.since>minute){v.since=current;v.n=0;}v.n++;rate.set(ip,v);return v.n<=100;}
 const server=http.createServer(async(req,res)=>{
   const origin=req.headers.origin||'';
-  const allowed=!ORIGIN||origin===ORIGIN;
+  const allowed = !ORIGIN || !origin || origin === ORIGIN;
   res.setHeader('Access-Control-Allow-Origin',ORIGIN||'*');res.setHeader('Vary','Origin');
   res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers','Content-Type');
