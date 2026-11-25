@@ -12,7 +12,7 @@ const code=()=>Array.from({length:6},()=>CODE[crypto.randomInt(CODE.length)]).jo
 const send=(ws,obj)=>{if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify(obj));};
 const error=(ws,message)=>send(ws,{type:'error',message});
 const now=()=>Date.now();
-const makeRoom=()=>{let id;do{id=code()}while(rooms.has(id));let r={id,board:Array(225).fill(0),turn:1,moves:[],winner:0,draw:false,players:[null,null],spectators:new Set(),score:[0,0],pendingUndo:null,rematch:new Set(),updated:now(),round:1};rooms.set(id,r);return r;};
+const makeRoom=()=>{let id;do{id=code()}while(rooms.has(id));let r={id,board:Array(225).fill(0),turn:1,moves:[],winner:0,draw:false,players:[null,null],spectators:new Set(),score:[0,0],pendingUndo:null,rematch:new Map(),updated:now(),round:1};rooms.set(id,r);return r;};
 const occupied=(r)=>r.players.filter(Boolean).length;
 const snapshot=(r)=>({type:'state',room:r.id,board:r.board,turn:r.turn,moves:r.moves,winner:r.winner,draw:r.draw,round:r.round,score:r.score,players:r.players.map(p=>p?{name:p.name,online:!!p.ws&&p.ws.readyState===WebSocket.OPEN}:null),spectators:r.spectators.size,pendingUndo:r.pendingUndo,rematchCount:r.rematch.size});
 const sockets=(r)=>[...r.players.map(p=>p?.ws).filter(Boolean),...r.spectators];
@@ -22,7 +22,7 @@ const checkWin=(b,index,stone)=>{let x=index%15,y=Math.floor(index/15);for(const
 function detach(ws){const meta=ws.meta;if(!meta)return;let r=rooms.get(meta.room);ws.meta=null;if(!r)return;if(meta.role==='spectator')r.spectators.delete(ws);else{let p=r.players[meta.role-1];if(p?.ws===ws)p.ws=null;}r.pendingUndo=null;r.rematch.clear();publish(r);}
 function join(ws,r,name,token,requestedRole){detach(ws);let role='spectator',assignedToken=null;
   if(token){const i=r.players.findIndex(p=>p&&p.token===token);if(i!==-1){role=i+1;const old=r.players[i].ws;if(old&&old!==ws){send(old,{type:'notice',message:'다른 창에서 다시 접속했습니다.'});old.meta=null;old.close();}r.players[i].ws=ws;}}
-  if(role==='spectator'&&requestedRole!=='spectator'){const i=r.players.findIndex(p=>!p);if(i!==-1){role=i+1;assignedToken=crypto.randomBytes(24).toString('hex');r.players[i]={name,token:assignedToken,ws};}}
+  if(role==='spectator'&&requestedRole!=='spectator'){const i=(Number.isInteger(requestedRole)&&requestedRole>=1&&requestedRole<=2&&!r.players[requestedRole-1])?requestedRole-1:r.players.findIndex(p=>!p);if(i!==-1){role=i+1;assignedToken=crypto.randomBytes(24).toString('hex');r.players[i]={name,token:assignedToken,ws};}}
   if(role==='spectator')r.spectators.add(ws);
   ws.meta={room:r.id,role};send(ws,{type:'joined',room:r.id,role,token:assignedToken||((typeof role==='number')?r.players[role-1].token:null)});publish(r);
 }
@@ -34,9 +34,10 @@ const GH_BRANCH=process.env.GITHUB_BRANCH||'main';
 const GH_TOKEN=process.env.GITHUB_TOKEN||'';
 const GH_DIR=(process.env.GITHUB_RECORDS_DIR||'records').replace(/^\/+|\/+$/g,'');
 const GH_ENABLED=!!(GH_OWNER&&GH_REPO&&GH_TOKEN);
-const games=new Set(['sudoku','mines']);
+// Keep legacy game IDs for old clients, and add isolated difficulty leaderboards.
+const games=new Set(['sudoku','mines','sudoku_easy','sudoku_medium','sudoku_hard','mines_easy','mines_medium','mines_hard']);
 const tickets=new Map();
-const queues={sudoku:Promise.resolve(),mines:Promise.resolve()};
+const queues=Object.fromEntries([...games].map(g=>[g,Promise.resolve()]));
 const rate=new Map();
 const minute=60_000;
 const recordPath=g=>`${GH_DIR}/${g}.json`;
@@ -80,7 +81,7 @@ function sendJson(res,status,data){res.writeHead(status,{'Content-Type':'applica
 function checkRate(req){const ip=String(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').split(',')[0].trim().slice(0,80);const current=Date.now();const v=rate.get(ip)||{since:current,n:0};if(current-v.since>minute){v.since=current;v.n=0;}v.n++;rate.set(ip,v);return v.n<=100;}
 const server=http.createServer(async(req,res)=>{
   const origin=req.headers.origin||'';
-  const allowed = !ORIGIN || !origin || origin === ORIGIN;
+  const allowed=!ORIGIN||!origin||origin===ORIGIN;
   res.setHeader('Access-Control-Allow-Origin',ORIGIN||'*');res.setHeader('Vary','Origin');
   res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers','Content-Type');
@@ -128,14 +129,29 @@ const server=http.createServer(async(req,res)=>{
 const wss=new WebSocketServer({server,maxPayload:4096,verifyClient:info=>!ORIGIN||info.origin===ORIGIN||!info.origin});
 wss.on('connection',ws=>{ws.isAlive=true;ws.meta=null;ws.on('pong',()=>ws.isAlive=true);ws.on('message',raw=>{try{
   let data=JSON.parse(raw.toString());if(!data||typeof data.type!=='string')return;
-  if(data.type==='create'){const r=makeRoom();join(ws,r,safeName(data.name),null,'player');return;}
+  if(data.type==='create'){const r=makeRoom();join(ws,r,safeName(data.name),null,data.color===2?2:1);return;}
   if(data.type==='join'){let id=String(data.room||'').trim().toUpperCase();const r=rooms.get(id);if(!r)throw new Error('존재하지 않거나 종료된 방입니다.');join(ws,r,safeName(data.name),typeof data.token==='string'?data.token:null,data.spectator?'spectator':'player');return;}
   if(data.type==='leave'){detach(ws);send(ws,{type:'left'});return;}
   const {meta,r}=active(ws),seat=meta.role;
   if(data.type==='place'){if(typeof seat!=='number')throw new Error('관전자는 착수할 수 없습니다.');if(r.winner||r.draw)throw new Error('대국이 종료되었습니다.');if(occupied(r)<2)throw new Error('상대 플레이어 입장을 기다려주세요.');if(!r.players[0]?.ws||!r.players[1]?.ws)throw new Error('상대방이 연결되지 않았습니다.');if(r.turn!==seat)throw new Error('상대방 차례입니다.');const i=data.index;if(!Number.isInteger(i)||i<0||i>=225||r.board[i])throw new Error('둘 수 없는 자리입니다.');r.board[i]=seat;r.moves.push(i);r.pendingUndo=null;r.rematch.clear();if(checkWin(r.board,i,seat)){r.winner=seat;r.score[seat-1]++;}else if(r.moves.length===225){r.draw=true;}else r.turn=3-seat;publish(r);return;}
   if(data.type==='undo_request'){if(typeof seat!=='number'||r.moves.length===0||r.winner||r.draw)throw new Error('지금은 무르기를 요청할 수 없습니다.');if(!r.players[2-seat]?.ws)throw new Error('상대방이 접속 중이지 않습니다.');if(r.pendingUndo)throw new Error('이미 대기 중인 요청이 있습니다.');r.pendingUndo=seat;publish(r);return;}
   if(data.type==='undo_answer'){if(typeof seat!=='number'||r.pendingUndo!==3-seat)throw new Error('답변할 무르기 요청이 없습니다.');if(data.accept===true){const last=r.moves.pop();r.board[last]=0;r.turn=3-seat;}r.pendingUndo=null;publish(r);return;}
-  if(data.type==='rematch'){if(typeof seat!=='number')throw new Error('관전자는 재대결을 신청할 수 없습니다.');if(!r.winner&&!r.draw)throw new Error('대국 종료 후 신청할 수 있습니다.');r.rematch.add(seat);if(r.rematch.size===2){r.round++;r.board=Array(225).fill(0);r.moves=[];r.winner=0;r.draw=false;r.turn=(r.round%2===1)?1:2;r.rematch.clear();r.pendingUndo=null;}publish(r);return;}
+  if(data.type==='rematch'){if(typeof seat!=='number')throw new Error('관전자는 재대결을 신청할 수 없습니다.');if(!r.winner&&!r.draw)throw new Error('대국 종료 후 신청할 수 있습니다.');if(!r.players[0]?.ws||!r.players[1]?.ws)throw new Error('상대방이 연결되어 있어야 재대결을 시작할 수 있습니다.');
+    const desired=data.color===2?2:data.color===1?1:null;
+    if(desired===null)throw new Error('다음 대국의 흑돌 또는 백돌을 선택해 주세요.');
+    const other=r.rematch.get(3-seat);
+    if(other===desired)throw new Error('상대방도 같은 색을 선택했습니다. 반대 색을 선택하여 다시 신청해 주세요.');
+    r.rematch.set(seat,desired);
+    if(r.rematch.size===2){
+      const oldPlayers=r.players.slice(),oldScores=r.score.slice();
+      const blackSeat=[1,2].find(i=>r.rematch.get(i)===1);
+      if(blackSeat===2){
+        r.players=[oldPlayers[1],oldPlayers[0]];r.score=[oldScores[1],oldScores[0]];
+        for(let i=0;i<2;i++)if(r.players[i]?.ws){r.players[i].ws.meta.role=i+1;send(r.players[i].ws,{type:'joined',room:r.id,role:i+1,token:r.players[i].token});}
+      }
+      r.round++;r.board=Array(225).fill(0);r.moves=[];r.winner=0;r.draw=false;r.turn=1;r.rematch.clear();r.pendingUndo=null;
+      broadcast(r,{type:'notice',message:'재대결이 시작되었습니다. 흑돌부터 두세요.'});
+    }publish(r);return;}
   if(data.type==='chat'){const message=String(data.message||'').trim().slice(0,120);if(message)broadcast(r,{type:'chat',name:typeof seat==='number'?r.players[seat-1]?.name:'관전자',message});return;}
 }catch(e){error(ws,e?.message||'처리 중 오류가 발생했습니다.');}});ws.on('close',()=>detach(ws));ws.on('error',()=>{});});
 const interval=setInterval(()=>{for(const ws of wss.clients){if(!ws.isAlive){ws.terminate();continue;}ws.isAlive=false;ws.ping();}for(const [ticket,t] of tickets){if(now()-t.started>14400000)tickets.delete(ticket);}for(const [ip,v] of rate){if(now()-v.since>2*minute)rate.delete(ip);}for(const [id,r] of rooms){if(!sockets(r).some(ws=>ws.readyState===WebSocket.OPEN)&&now()-r.updated>ROOM_TTL)rooms.delete(id);}},CLEAN_INTERVAL);
