@@ -16,7 +16,7 @@ function detach(ws){const meta=ws.boardMeta;if(!meta)return;ws.boardMeta=null;co
 export function detachBoard(ws){detach(ws);}
 const token=()=>crypto.randomBytes(24).toString('hex');
 function join(ws,r,data,creator){detach(ws);let role='spectator',stored=null;const t=String(data.token||'');if(t){const k=r.players.findIndex(p=>p?.token===t);if(k>=0){role=k+1;const other=r.players[k].ws;if(other&&other!==ws){other.boardMeta=null;other.close();}r.players[k].ws=ws;}}
-if(role==='spectator'&&!data.spectator){const k=creator?0:r.players.findIndex(p=>!p);if(k>=0&&!r.players[k]){role=k+1;stored=token();r.players[k]={name:name(data.name,creator?'선수1':'선수2'),token:stored,ws};}}
+if(role==='spectator'&&!data.spectator){const k=creator?(data.color===2?1:0):r.players.findIndex(p=>!p);if(k>=0&&!r.players[k]){role=k+1;stored=token();r.players[k]={name:name(data.name,creator?'선수1':'선수2'),token:stored,ws};}}
 if(role==='spectator')r.spectators.add(ws);
 ws.boardMeta={room:r.id,role,name:name(data.name,role==='spectator'?'관전자':r.players[role-1].name)};
 startClock(r);send(ws,{type:'board_joined',game:r.game,room:r.id,role,token:stored||(typeof role==='number'?r.players[role-1].token:null)});publish(r);}
