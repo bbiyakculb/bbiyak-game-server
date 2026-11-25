@@ -6,25 +6,61 @@ const PORT=Number(process.env.PORT||8000);
 const ORIGIN=(process.env.ALLOWED_ORIGIN||'').replace(/\/$/,'');
 const rooms=new Map();
 const CODE='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const CLEAN_INTERVAL=60_000, ROOM_TTL=1000*60*60*3;
+const CLEAN_INTERVAL=60_000, ROOM_TTL=1000*60*60*3, TURN_MS=30_000;
 const safeName=x=>String(x||'').trim().slice(0,16).replace(/[<>"'`\\]/g,'')||'선수';
 const code=()=>Array.from({length:6},()=>CODE[crypto.randomInt(CODE.length)]).join('');
 const send=(ws,obj)=>{if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify(obj));};
 const error=(ws,message)=>send(ws,{type:'error',message});
 const now=()=>Date.now();
-const makeRoom=()=>{let id;do{id=code()}while(rooms.has(id));let r={id,board:Array(225).fill(0),turn:1,moves:[],winner:0,draw:false,players:[null,null],spectators:new Set(),score:[0,0],pendingUndo:null,rematch:new Map(),updated:now(),round:1};rooms.set(id,r);return r;};
+const makeRoom=()=>{let id;do{id=code()}while(rooms.has(id));let r={id,board:Array(225).fill(0),turn:1,moves:[],winner:0,draw:false,players:[null,null],spectators:new Set(),score:[0,0],pendingUndo:null,rematch:new Map(),updated:now(),round:1,deadline:null};rooms.set(id,r);return r;};
 const occupied=(r)=>r.players.filter(Boolean).length;
-const snapshot=(r)=>({type:'state',room:r.id,board:r.board,turn:r.turn,moves:r.moves,winner:r.winner,draw:r.draw,round:r.round,score:r.score,players:r.players.map(p=>p?{name:p.name,online:!!p.ws&&p.ws.readyState===WebSocket.OPEN}:null),spectators:r.spectators.size,pendingUndo:r.pendingUndo,rematchCount:r.rematch.size});
+const snapshot=(r)=>({type:'state',room:r.id,board:r.board,turn:r.turn,moves:r.moves,winner:r.winner,draw:r.draw,round:r.round,score:r.score,players:r.players.map(p=>p?{name:p.name,online:!!p.ws&&p.ws.readyState===WebSocket.OPEN}:null),spectators:r.spectators.size,pendingUndo:r.pendingUndo,rematchCount:r.rematch.size,deadline:r.deadline,serverNow:now()});
 const sockets=(r)=>[...r.players.map(p=>p?.ws).filter(Boolean),...r.spectators];
 const broadcast=(r,obj)=>{r.updated=now();for(const ws of sockets(r))send(ws,obj);};
 const publish=r=>broadcast(r,snapshot(r));
-const checkWin=(b,index,stone)=>{let x=index%15,y=Math.floor(index/15);for(const [dx,dy] of [[1,0],[0,1],[1,1],[1,-1]]){let n=1;for(const sign of [-1,1]){let xx=x+dx*sign,yy=y+dy*sign;while(xx>=0&&xx<15&&yy>=0&&yy<15&&b[yy*15+xx]===stone){n++;xx+=dx*sign;yy+=dy*sign;}}if(n>=5)return true;}return false;};
-function detach(ws){const meta=ws.meta;if(!meta)return;let r=rooms.get(meta.room);ws.meta=null;if(!r)return;if(meta.role==='spectator')r.spectators.delete(ws);else{let p=r.players[meta.role-1];if(p?.ws===ws)p.ws=null;}r.pendingUndo=null;r.rematch.clear();publish(r);}
+const directions=[[1,0],[0,1],[1,1],[1,-1]];
+const inside=(x,y)=>x>=0&&x<15&&y>=0&&y<15;
+function countDir(b,x,y,dx,dy,stone){let n=0;for(let xx=x+dx,yy=y+dy;inside(xx,yy)&&b[yy*15+xx]===stone;xx+=dx,yy+=dy)n++;return n;}
+// Exact five only. An uninterrupted line of six or more is not a winning line.
+function checkWin(b,index,stone){const x=index%15,y=Math.floor(index/15);return directions.some(([dx,dy])=>1+countDir(b,x,y,dx,dy,stone)+countDir(b,x,y,-dx,-dy,stone)===5);}
+// A true open three is a line of three which can become a straight open four in one additional move.
+// Count each axis only once, even if more than one extension is possible.
+function openThreeAxis(b,index,dx,dy){
+  const x=index%15,y=Math.floor(index/15);
+  for(let t=-4;t<=4;t++){
+    const ex=x+dx*t,ey=y+dy*t;
+    if(!inside(ex,ey)||b[ey*15+ex]!==0)continue;
+    b[ey*15+ex]=1;
+    let found=false;
+    for(let start=-5;start<=1&&!found;start++){
+      if(!(start<=0&&0<=start+3&&start<=t&&t<=start+3))continue;
+      const vals=[];
+      for(let k=-1;k<=4;k++){
+        const px=x+(start+k)*dx,py=y+(start+k)*dy;
+        vals.push(inside(px,py)?b[py*15+px]:-1);
+      }
+      if(vals[0]===0&&vals[5]===0&&vals.slice(1,5).every(v=>v===1))found=true;
+    }
+    b[ey*15+ex]=0;
+    if(found)return true;
+  }
+  return false;
+}
+function doubleThree(b,index){if(b[index]!==1)return false;let count=0;for(const [dx,dy] of directions){if(openThreeAxis(b,index,dx,dy)&&++count>=2)return true;}return false;}
+function onlinePlayers(r){return r.players.every(p=>p?.ws?.readyState===WebSocket.OPEN);}
+function clockReset(r){r.deadline=!r.winner&&!r.draw&&!r.pendingUndo&&onlinePlayers(r)?now()+TURN_MS:null;}
+function clockPause(r){r.deadline=null;}
+function expireTurn(r){if(!r.deadline||now()<r.deadline||r.winner||r.draw)return false;
+  if(!onlinePlayers(r)){clockPause(r);return false;}
+  r.winner=3-r.turn;r.score[r.winner-1]++;r.deadline=null;
+  broadcast(r,{type:'notice',message:`${r.turn===1?'흑돌':'백돌'} 시간 초과 (30초). 상대 승리입니다.`});publish(r);return true;
+}
+function detach(ws){const meta=ws.meta;if(!meta)return;let r=rooms.get(meta.room);ws.meta=null;if(!r)return;if(meta.role==='spectator')r.spectators.delete(ws);else{let p=r.players[meta.role-1];if(p?.ws===ws)p.ws=null;}r.pendingUndo=null;r.rematch.clear();clockPause(r);publish(r);}
 function join(ws,r,name,token,requestedRole){detach(ws);let role='spectator',assignedToken=null;
   if(token){const i=r.players.findIndex(p=>p&&p.token===token);if(i!==-1){role=i+1;const old=r.players[i].ws;if(old&&old!==ws){send(old,{type:'notice',message:'다른 창에서 다시 접속했습니다.'});old.meta=null;old.close();}r.players[i].ws=ws;}}
-  if(role==='spectator'&&requestedRole!=='spectator'){const i=(Number.isInteger(requestedRole)&&requestedRole>=1&&requestedRole<=2&&!r.players[requestedRole-1])?requestedRole-1:r.players.findIndex(p=>!p);if(i!==-1){role=i+1;assignedToken=crypto.randomBytes(24).toString('hex');r.players[i]={name,token:assignedToken,ws};}}
+  if(role==='spectator'&&requestedRole!=='spectator'){const i=(Number.isInteger(requestedRole)&&requestedRole>=1&&requestedRole<=2&&!r.players[requestedRole-1])?requestedRole-1:r.players.findIndex(p=>!p);if(i!==-1){role=i+1;assignedToken=crypto.randomBytes(24).toString('hex');r.players[i]={name,defaultName:requestedRole==='player'?'선수2':'선수1',token:assignedToken,ws};}}
   if(role==='spectator')r.spectators.add(ws);
-  ws.meta={room:r.id,role,name};send(ws,{type:'joined',room:r.id,role,token:assignedToken||((typeof role==='number')?r.players[role-1].token:null)});publish(r);
+  ws.meta={room:r.id,role,name};if(!r.deadline&&!r.winner&&!r.draw&&onlinePlayers(r))clockReset(r);send(ws,{type:'joined',room:r.id,role,defaultName:typeof role==='number'?r.players[role-1].defaultName:'관전자',token:assignedToken||((typeof role==='number')?r.players[role-1].token:null)});publish(r);
 }
 function active(ws){const meta=ws.meta;if(!meta)throw new Error('먼저 방에 입장하세요.');const r=rooms.get(meta.room);if(!r)throw new Error('방이 종료되었습니다.');return {meta,r};}
 // GitHub-backed friendly leaderboard. Never expose the token to browsers.
@@ -133,9 +169,10 @@ wss.on('connection',ws=>{ws.isAlive=true;ws.meta=null;ws.on('pong',()=>ws.isAliv
   if(data.type==='join'){let id=String(data.room||'').trim().toUpperCase();const r=rooms.get(id);if(!r)throw new Error('존재하지 않거나 종료된 방입니다.');join(ws,r,safeName(data.name||(data.spectator?'관전자':'선수2')),typeof data.token==='string'?data.token:null,data.spectator?'spectator':'player');return;}
   if(data.type==='leave'){detach(ws);send(ws,{type:'left'});return;}
   const {meta,r}=active(ws),seat=meta.role;
-  if(data.type==='place'){if(typeof seat!=='number')throw new Error('관전자는 착수할 수 없습니다.');if(r.winner||r.draw)throw new Error('대국이 종료되었습니다.');if(occupied(r)<2)throw new Error('상대 플레이어 입장을 기다려주세요.');if(!r.players[0]?.ws||!r.players[1]?.ws)throw new Error('상대방이 연결되지 않았습니다.');if(r.turn!==seat)throw new Error('상대방 차례입니다.');const i=data.index;if(!Number.isInteger(i)||i<0||i>=225||r.board[i])throw new Error('둘 수 없는 자리입니다.');r.board[i]=seat;r.moves.push(i);r.pendingUndo=null;r.rematch.clear();if(checkWin(r.board,i,seat)){r.winner=seat;r.score[seat-1]++;}else if(r.moves.length===225){r.draw=true;}else r.turn=3-seat;publish(r);return;}
-  if(data.type==='undo_request'){if(typeof seat!=='number'||r.moves.length===0||r.winner||r.draw)throw new Error('지금은 무르기를 요청할 수 없습니다.');if(!r.players[2-seat]?.ws)throw new Error('상대방이 접속 중이지 않습니다.');if(r.pendingUndo)throw new Error('이미 대기 중인 요청이 있습니다.');r.pendingUndo=seat;publish(r);return;}
-  if(data.type==='undo_answer'){if(typeof seat!=='number'||r.pendingUndo!==3-seat)throw new Error('답변할 무르기 요청이 없습니다.');if(data.accept===true){const last=r.moves.pop();r.board[last]=0;r.turn=3-seat;}r.pendingUndo=null;publish(r);return;}
+  if(data.type==='rename'){const fallback=seat==='spectator'?'관전자':r.players[seat-1]?.defaultName||'선수';const next=safeName(data.name||fallback);meta.name=next;if(typeof seat==='number')r.players[seat-1].name=next;publish(r);return;}
+  if(data.type==='place'){if(typeof seat!=='number')throw new Error('관전자는 착수할 수 없습니다.');if(r.winner||r.draw)throw new Error('대국이 종료되었습니다.');if(occupied(r)<2)throw new Error('상대 플레이어 입장을 기다려주세요.');if(!r.players[0]?.ws||!r.players[1]?.ws)throw new Error('상대방이 연결되지 않았습니다.');if(expireTurn(r))throw new Error('시간 초과로 대국이 종료되었습니다.');if(r.turn!==seat)throw new Error('상대방 차례입니다.');const i=data.index;if(!Number.isInteger(i)||i<0||i>=225||r.board[i])throw new Error('둘 수 없는 자리입니다.');r.board[i]=seat;if(seat===1&&!checkWin(r.board,i,seat)&&doubleThree(r.board,i)){r.board[i]=0;throw new Error('흑돌은 쌍삼을 둘 수 없습니다. 열린 삼 하나는 허용됩니다.');}r.moves.push(i);r.pendingUndo=null;r.rematch.clear();if(checkWin(r.board,i,seat)){r.winner=seat;r.score[seat-1]++;}else if(r.moves.length===225){r.draw=true;}else r.turn=3-seat;clockReset(r);publish(r);return;}
+  if(data.type==='undo_request'){if(typeof seat!=='number'||r.moves.length===0||r.winner||r.draw)throw new Error('지금은 무르기를 요청할 수 없습니다.');if(!r.players[2-seat]?.ws)throw new Error('상대방이 접속 중이지 않습니다.');if(r.pendingUndo)throw new Error('이미 대기 중인 요청이 있습니다.');r.pendingUndo=seat;clockPause(r);publish(r);return;}
+  if(data.type==='undo_answer'){if(typeof seat!=='number'||r.pendingUndo!==3-seat)throw new Error('답변할 무르기 요청이 없습니다.');if(data.accept===true){const last=r.moves.pop();r.board[last]=0;r.turn=3-seat;}r.pendingUndo=null;clockReset(r);publish(r);return;}
   if(data.type==='rematch'){if(typeof seat!=='number')throw new Error('관전자는 재대결을 신청할 수 없습니다.');if(!r.winner&&!r.draw)throw new Error('대국 종료 후 신청할 수 있습니다.');if(!r.players[0]?.ws||!r.players[1]?.ws)throw new Error('상대방이 연결되어 있어야 재대결을 시작할 수 있습니다.');
     const desired=data.color===2?2:data.color===1?1:null;
     if(desired===null)throw new Error('다음 대국의 흑돌 또는 백돌을 선택해 주세요.');
@@ -147,13 +184,14 @@ wss.on('connection',ws=>{ws.isAlive=true;ws.meta=null;ws.on('pong',()=>ws.isAliv
       const blackSeat=[1,2].find(i=>r.rematch.get(i)===1);
       if(blackSeat===2){
         r.players=[oldPlayers[1],oldPlayers[0]];r.score=[oldScores[1],oldScores[0]];
-        for(let i=0;i<2;i++)if(r.players[i]?.ws){r.players[i].ws.meta.role=i+1;send(r.players[i].ws,{type:'joined',room:r.id,role:i+1,token:r.players[i].token});}
+        for(let i=0;i<2;i++)if(r.players[i]?.ws){r.players[i].ws.meta.role=i+1;send(r.players[i].ws,{type:'joined',room:r.id,role:i+1,defaultName:r.players[i].defaultName,token:r.players[i].token});}
       }
-      r.round++;r.board=Array(225).fill(0);r.moves=[];r.winner=0;r.draw=false;r.turn=1;r.rematch.clear();r.pendingUndo=null;
+      r.round++;r.board=Array(225).fill(0);r.moves=[];r.winner=0;r.draw=false;r.turn=1;r.rematch.clear();r.pendingUndo=null;clockReset(r);
       broadcast(r,{type:'notice',message:'재대결이 시작되었습니다. 흑돌부터 두세요.'});
     }publish(r);return;}
   if(data.type==='chat'){const message=String(data.message||'').trim().slice(0,120);if(message)broadcast(r,{type:'chat',name:typeof seat==='number'?r.players[seat-1]?.name:(meta.name||'관전자'),message});return;}
 }catch(e){error(ws,e?.message||'처리 중 오류가 발생했습니다.');}});ws.on('close',()=>detach(ws));ws.on('error',()=>{});});
+const clockInterval=setInterval(()=>{for(const r of rooms.values())expireTurn(r);},250);
 const interval=setInterval(()=>{for(const ws of wss.clients){if(!ws.isAlive){ws.terminate();continue;}ws.isAlive=false;ws.ping();}for(const [ticket,t] of tickets){if(now()-t.started>14400000)tickets.delete(ticket);}for(const [ip,v] of rate){if(now()-v.since>2*minute)rate.delete(ip);}for(const [id,r] of rooms){if(!sockets(r).some(ws=>ws.readyState===WebSocket.OPEN)&&now()-r.updated>ROOM_TTL)rooms.delete(id);}},CLEAN_INTERVAL);
 server.listen(PORT,'0.0.0.0',()=>console.log(`삐약 오목 서버: ${PORT}`));
-process.on('SIGTERM',()=>{clearInterval(interval);wss.close();server.close(()=>process.exit(0));setTimeout(()=>process.exit(0),3000).unref();});
+process.on('SIGTERM',()=>{clearInterval(interval);clearInterval(clockInterval);wss.close();server.close(()=>process.exit(0));setTimeout(()=>process.exit(0),3000).unref();});
