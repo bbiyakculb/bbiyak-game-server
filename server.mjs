@@ -7,7 +7,7 @@ const ORIGIN=(process.env.ALLOWED_ORIGIN||'').replace(/\/$/,'');
 const rooms=new Map();
 const CODE='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CLEAN_INTERVAL=60_000, ROOM_TTL=1000*60*60*3;
-const safeName=x=>String(x||'').trim().slice(0,16).replace(/[<>"'`\\]/g,'')||'플레이어';
+const safeName=x=>String(x||'').trim().slice(0,16).replace(/[<>"'`\\]/g,'')||'선수';
 const code=()=>Array.from({length:6},()=>CODE[crypto.randomInt(CODE.length)]).join('');
 const send=(ws,obj)=>{if(ws?.readyState===WebSocket.OPEN) ws.send(JSON.stringify(obj));};
 const error=(ws,message)=>send(ws,{type:'error',message});
@@ -24,7 +24,7 @@ function join(ws,r,name,token,requestedRole){detach(ws);let role='spectator',ass
   if(token){const i=r.players.findIndex(p=>p&&p.token===token);if(i!==-1){role=i+1;const old=r.players[i].ws;if(old&&old!==ws){send(old,{type:'notice',message:'다른 창에서 다시 접속했습니다.'});old.meta=null;old.close();}r.players[i].ws=ws;}}
   if(role==='spectator'&&requestedRole!=='spectator'){const i=(Number.isInteger(requestedRole)&&requestedRole>=1&&requestedRole<=2&&!r.players[requestedRole-1])?requestedRole-1:r.players.findIndex(p=>!p);if(i!==-1){role=i+1;assignedToken=crypto.randomBytes(24).toString('hex');r.players[i]={name,token:assignedToken,ws};}}
   if(role==='spectator')r.spectators.add(ws);
-  ws.meta={room:r.id,role};send(ws,{type:'joined',room:r.id,role,token:assignedToken||((typeof role==='number')?r.players[role-1].token:null)});publish(r);
+  ws.meta={room:r.id,role,name};send(ws,{type:'joined',room:r.id,role,token:assignedToken||((typeof role==='number')?r.players[role-1].token:null)});publish(r);
 }
 function active(ws){const meta=ws.meta;if(!meta)throw new Error('먼저 방에 입장하세요.');const r=rooms.get(meta.room);if(!r)throw new Error('방이 종료되었습니다.');return {meta,r};}
 // GitHub-backed friendly leaderboard. Never expose the token to browsers.
@@ -129,8 +129,8 @@ const server=http.createServer(async(req,res)=>{
 const wss=new WebSocketServer({server,maxPayload:4096,verifyClient:info=>!ORIGIN||info.origin===ORIGIN||!info.origin});
 wss.on('connection',ws=>{ws.isAlive=true;ws.meta=null;ws.on('pong',()=>ws.isAlive=true);ws.on('message',raw=>{try{
   let data=JSON.parse(raw.toString());if(!data||typeof data.type!=='string')return;
-  if(data.type==='create'){const r=makeRoom();join(ws,r,safeName(data.name),null,data.color===2?2:1);return;}
-  if(data.type==='join'){let id=String(data.room||'').trim().toUpperCase();const r=rooms.get(id);if(!r)throw new Error('존재하지 않거나 종료된 방입니다.');join(ws,r,safeName(data.name),typeof data.token==='string'?data.token:null,data.spectator?'spectator':'player');return;}
+  if(data.type==='create'){const r=makeRoom();join(ws,r,safeName(data.name||'선수1'),null,data.color===2?2:1);return;}
+  if(data.type==='join'){let id=String(data.room||'').trim().toUpperCase();const r=rooms.get(id);if(!r)throw new Error('존재하지 않거나 종료된 방입니다.');join(ws,r,safeName(data.name||(data.spectator?'관전자':'선수2')),typeof data.token==='string'?data.token:null,data.spectator?'spectator':'player');return;}
   if(data.type==='leave'){detach(ws);send(ws,{type:'left'});return;}
   const {meta,r}=active(ws),seat=meta.role;
   if(data.type==='place'){if(typeof seat!=='number')throw new Error('관전자는 착수할 수 없습니다.');if(r.winner||r.draw)throw new Error('대국이 종료되었습니다.');if(occupied(r)<2)throw new Error('상대 플레이어 입장을 기다려주세요.');if(!r.players[0]?.ws||!r.players[1]?.ws)throw new Error('상대방이 연결되지 않았습니다.');if(r.turn!==seat)throw new Error('상대방 차례입니다.');const i=data.index;if(!Number.isInteger(i)||i<0||i>=225||r.board[i])throw new Error('둘 수 없는 자리입니다.');r.board[i]=seat;r.moves.push(i);r.pendingUndo=null;r.rematch.clear();if(checkWin(r.board,i,seat)){r.winner=seat;r.score[seat-1]++;}else if(r.moves.length===225){r.draw=true;}else r.turn=3-seat;publish(r);return;}
@@ -152,7 +152,7 @@ wss.on('connection',ws=>{ws.isAlive=true;ws.meta=null;ws.on('pong',()=>ws.isAliv
       r.round++;r.board=Array(225).fill(0);r.moves=[];r.winner=0;r.draw=false;r.turn=1;r.rematch.clear();r.pendingUndo=null;
       broadcast(r,{type:'notice',message:'재대결이 시작되었습니다. 흑돌부터 두세요.'});
     }publish(r);return;}
-  if(data.type==='chat'){const message=String(data.message||'').trim().slice(0,120);if(message)broadcast(r,{type:'chat',name:typeof seat==='number'?r.players[seat-1]?.name:'관전자',message});return;}
+  if(data.type==='chat'){const message=String(data.message||'').trim().slice(0,120);if(message)broadcast(r,{type:'chat',name:typeof seat==='number'?r.players[seat-1]?.name:(meta.name||'관전자'),message});return;}
 }catch(e){error(ws,e?.message||'처리 중 오류가 발생했습니다.');}});ws.on('close',()=>detach(ws));ws.on('error',()=>{});});
 const interval=setInterval(()=>{for(const ws of wss.clients){if(!ws.isAlive){ws.terminate();continue;}ws.isAlive=false;ws.ping();}for(const [ticket,t] of tickets){if(now()-t.started>14400000)tickets.delete(ticket);}for(const [ip,v] of rate){if(now()-v.since>2*minute)rate.delete(ip);}for(const [id,r] of rooms){if(!sockets(r).some(ws=>ws.readyState===WebSocket.OPEN)&&now()-r.updated>ROOM_TTL)rooms.delete(id);}},CLEAN_INTERVAL);
 server.listen(PORT,'0.0.0.0',()=>console.log(`삐약 오목 서버: ${PORT}`));
