@@ -1,3 +1,4 @@
+import {handleGalagaHttp} from './galaga_scores.mjs';
 import {isBoardMessage,handleBoardMessage,detachBoard,tickBoard} from './board_games.mjs';
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -127,6 +128,7 @@ const server=http.createServer(async(req,res)=>{
   if(!checkRate(req)){sendJson(res,429,{error:'요청이 너무 많습니다. 잠시 후 다시 시도하세요.'});return;}
   const url=new URL(req.url||'/',`http://${req.headers.host||'localhost'}`);
   if(url.pathname==='/health'||url.pathname==='/'){sendJson(res,200,{ok:true,service:'bbiyak-minigames',rooms:rooms.size,githubConfigured:GH_ENABLED});return;}
+  if(await handleGalagaHttp(req,res,url))return;
   if(url.pathname==='/api/leaderboard'&&req.method==='GET'){
     const game=url.searchParams.get('game');if(!games.has(game)){sendJson(res,400,{error:'게임 종류가 올바르지 않습니다.'});return;}
     if(!GH_ENABLED){sendJson(res,503,{error:'서버에 GitHub 기록 저장소가 설정되지 않았습니다.'});return;}
