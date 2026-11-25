@@ -5,7 +5,7 @@ const center=(x,y)=>x===4&&(y===1||y===8);
 const pside=p=>p?p[0]==='h'?1:2:0;
 const dirs=[[1,0],[-1,0],[0,1],[0,-1]];
 const palaceEdges=(x,y)=>{const out=[];for(const [dx,dy] of [[1,1],[1,-1],[-1,1],[-1,-1]]){const xx=x+dx,yy=y+dy;if(xx<3||xx>5||!((yy>=0&&yy<=2)||(yy>=7&&yy<=9)))continue;const same=(y<=2&&yy<=2)||(y>=7&&yy>=7);if(same&&(center(x,y)||center(xx,yy)))out.push([xx,yy]);}return out;};
-export function init(){const b=Array(90).fill('');const top=['cr','ce','ch','ca','','ca','ch','ce','cr'];for(let x=0;x<9;x++){b[x]=top[x];b[81+x]='h'+top[x].slice(1);}b[13]='ck';b[76]='hk';b[19]='cc';b[25]='cc';b[64]='hc';b[70]='hc';for(const x of [0,2,4,6,8]){b[27+x]='cs';b[54+x]='hs';}return {b,t:1,half:0};}
+export function init(){const b=Array(90).fill('');const top=['cr','ce','ch','ca','','ca','ch','ce','cr'];for(let x=0;x<9;x++){b[x]=top[x];if(top[x])b[81+x]='h'+top[x].slice(1);}b[13]='ck';b[76]='hk';b[19]='cc';b[25]='cc';b[64]='hc';b[70]='hc';for(const x of [0,2,4,6,8]){b[27+x]='cs';b[54+x]='hs';}return {b,t:1,half:0};}
 function raw(s,f){const b=s.b,p=b[f];if(!p)return [];const who=pside(p),x=f%9,y=Math.floor(f/9),type=p[1],out=[];const add=(xx,yy)=>{if(at(xx,yy)&&pside(b[yy*9+xx])!==who)out.push(yy*9+xx);};
  if(type==='s'){for(const [dx,dy] of [[-1,0],[1,0],[0,who===1?-1:1]])add(x+dx,y+dy);for(const [xx,yy] of palaceEdges(x,y))if((who===1?yy<y:yy>y))add(xx,yy);}
  if(type==='k'||type==='a'){for(const [dx,dy] of dirs){const xx=x+dx,yy=y+dy;if(palace(xx,yy,who))add(xx,yy);}for(const [xx,yy] of palaceEdges(x,y))if(palace(xx,yy,who))add(xx,yy);}
