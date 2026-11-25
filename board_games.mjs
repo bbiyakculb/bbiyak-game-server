@@ -3,20 +3,20 @@ import {WebSocket} from 'ws';
 import * as chess from './chess_rules.mjs';
 import * as janggi from './janggi_rules.mjs';
 const engines={chess,janggi};
-const rooms=new Map();const TTL=3*60*60*1000,TURN=60000,SETUP_MS=5000;const SETUP_OPTIONS=new Set(['heeh','hehe','eheh','ehhe']);
+const rooms=new Map();const TTL=3*60*60*1000,TURN=60000,SETUP_MS=20000;const SETUP_OPTIONS=new Set(['heeh','hehe','eheh','ehhe']);
 const send=(ws,data)=>{if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(data));};
 const name=(s,fallback)=>String(s||'').trim().replace(/[<>"'`\\]/g,'').slice(0,16)||fallback;
 const online=r=>r.players.every(p=>p?.ws?.readyState===WebSocket.OPEN);
 // Chess engine uses 1 (white) and -1 (black); room seats use 1 and 2.
 const turnSeat=r=>r.game==='chess'?(r.state.t===1?1:2):r.state.t;
 const peers=r=>[...r.players.map(p=>p?.ws).filter(Boolean),...r.spectators];
-const resetJanggiSetup=r=>{if(r.game==='janggi')r.setup={phase:'waiting',endsAt:null,choices:{1:'ehhe',2:'ehhe'}};};
+const resetJanggiSetup=r=>{if(r.game==='janggi')r.setup={phase:'waiting',endsAt:null,choices:{1:'ehhe',2:'ehhe'},done:{1:false,2:false}};};
 function manageJanggiSetup(r){if(r.game!=='janggi'||!r.setup||r.moves.length||r.winner||r.draw)return;
  const setup=r.setup;
  if(setup.phase==='ready')return;
- if(!online(r)){if(setup.phase!=='waiting'){setup.phase='waiting';setup.endsAt=null;publish(r);}return;}
+ if(!online(r)){if(setup.phase!=='waiting'){setup.phase='waiting';setup.endsAt=null;setup.done={1:false,2:false};publish(r);}return;}
  if(setup.phase==='waiting'){setup.phase='choosing';setup.endsAt=Date.now()+SETUP_MS;publish(r);return;}
- if(setup.phase==='choosing'&&Date.now()>=setup.endsAt){
+ if(setup.phase==='choosing'&&(Date.now()>=setup.endsAt||(setup.done[1]&&setup.done[2]))){
    r.state=janggi.init(setup.choices);r.history=[r.state];r.moves=[];setup.phase='ready';setup.endsAt=null;
    startClock(r);notice(r,'마·상 배치가 확정되었습니다. 대국을 시작합니다.');publish(r);
  }
@@ -44,7 +44,10 @@ if(d.type==='janggi_setup'&&r.game==='janggi'){
  if(typeof seat!=='number')throw Error('관전자는 배치를 선택할 수 없습니다.');
  if(!SETUP_OPTIONS.has(d.layout))throw Error('올바른 마·상 배치를 선택해 주세요.');
  if(r.setup?.phase!=='choosing'||Date.now()>=r.setup.endsAt)throw Error('마·상 배치 선택 시간이 종료되었습니다.');
- r.setup.choices[seat]=d.layout;publish(r);return;
+ if(r.setup.done[seat])throw Error('이미 배치를 확정했습니다.');
+ r.setup.choices[seat]=d.layout;
+ if(d.confirm===true)r.setup.done[seat]=true;
+ manageJanggiSetup(r);publish(r);return;
 }
 if(d.type==='chat'){const msg=String(d.message||'').trim().slice(0,120);if(msg)for(const peer of peers(r))send(peer,{type:'board_chat',name:typeof seat==='number'?r.players[seat-1].name:meta.name,message:msg});return;}
 if(typeof seat!=='number')throw Error('관전자는 착수할 수 없습니다.');
@@ -53,6 +56,6 @@ if(d.type==='pass'&&r.game==='janggi'){if(r.winner||r.draw)throw Error('대국�
 if(d.type==='move'){if(r.winner||r.draw)throw Error('대국이 종료되었습니다.');if(!online(r))throw Error('상대방 입장을 기다려주세요.');expire(r);if(r.winner)throw Error('시간 초과로 종료되었습니다.');if(turnSeat(r)!==seat)throw Error('상대방 차례입니다.');const result=engines[r.game].move(r.state,d);r.state=result.state;r.history.push(result.state);r.moves.push(result.label);r.undo=null;r.rematch.clear();const status=engines[r.game].status(r.state,r.history);r.winner=status.winner;r.draw=status.draw;r.reason=status.reason;if(r.winner)r.score[r.winner-1]++;startClock(r);publish(r);return;}
 if(d.type==='undo_request'){if(!r.moves.length||r.winner||r.draw||r.undo)throw Error('지금 무르기를 요청할 수 없습니다.');r.undo=seat;r.deadline=null;publish(r);return;}
 if(d.type==='undo_answer'){if(r.undo!==3-seat)throw Error('답변할 무르기 요청이 없습니다.');if(d.accept===true){r.history.pop();r.moves.pop();r.state=r.history.at(-1);}r.undo=null;startClock(r);publish(r);return;}
-if(d.type==='rematch'){if(!r.winner&&!r.draw)throw Error('대국 종료 후 재대결할 수 있습니다.');if(!online(r))throw Error('상대방 접속을 기다려주세요.');const color=d.color===2?2:d.color===1?1:0;if(!color)throw Error('선공 또는 후공을 선택하세요.');if(r.rematch.get(3-seat)===color)throw Error('상대방과 다른 색을 선택하세요.');r.rematch.set(seat,color);if(r.rematch.size===2){const old=r.players.slice(),scores=r.score.slice();if(r.rematch.get(1)===2){r.players=[old[1],old[0]];r.score=[scores[1],scores[0]];for(let i=0;i<2;i++)if(r.players[i]?.ws){const p=r.players[i];p.ws.boardMeta.role=i+1;send(p.ws,{type:'board_joined',game:r.game,room:r.id,role:i+1,token:p.token});}}r.state=engines[r.game].init();resetJanggiSetup(r);r.history=[r.state];r.moves=[];r.winner=0;r.draw=false;r.reason='';r.round++;r.undo=null;r.rematch.clear();startClock(r);if(r.game==='janggi'){manageJanggiSetup(r);notice(r,'재대결: 마·상 배치를 5초 안에 선택해 주세요.');}else notice(r,'재대결이 시작되었습니다. 선공부터 두세요.');}publish(r);return;}
+if(d.type==='rematch'){if(!r.winner&&!r.draw)throw Error('대국 종료 후 재대결할 수 있습니다.');if(!online(r))throw Error('상대방 접속을 기다려주세요.');const color=d.color===2?2:d.color===1?1:0;if(!color)throw Error('선공 또는 후공을 선택하세요.');if(r.rematch.get(3-seat)===color)throw Error('상대방과 다른 색을 선택하세요.');r.rematch.set(seat,color);if(r.rematch.size===2){const old=r.players.slice(),scores=r.score.slice();if(r.rematch.get(1)===2){r.players=[old[1],old[0]];r.score=[scores[1],scores[0]];for(let i=0;i<2;i++)if(r.players[i]?.ws){const p=r.players[i];p.ws.boardMeta.role=i+1;send(p.ws,{type:'board_joined',game:r.game,room:r.id,role:i+1,token:p.token});}}r.state=engines[r.game].init();resetJanggiSetup(r);r.history=[r.state];r.moves=[];r.winner=0;r.draw=false;r.reason='';r.round++;r.undo=null;r.rematch.clear();startClock(r);if(r.game==='janggi'){manageJanggiSetup(r);notice(r,'재대결: 마·상 배치를 20초 안에 선택해 주세요. 두 선수 모두 선택 완료하면 바로 시작합니다.');}else notice(r,'재대결이 시작되었습니다. 선공부터 두세요.');}publish(r);return;}
 }catch(e){send(ws,{type:'error',message:e.message||'처리 실패'});}}
 export function tickBoard(){for(const [id,r] of rooms){manageJanggiSetup(r);expire(r);if(!peers(r).some(ws=>ws.readyState===WebSocket.OPEN)&&Date.now()-r.updated>TTL)rooms.delete(id);}}
