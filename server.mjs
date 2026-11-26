@@ -48,7 +48,31 @@ function openThreeAxis(b,index,dx,dy){
   }
   return false;
 }
-function doubleThree(b,index){if(b[index]!==1)return false;let count=0;for(const [dx,dy] of directions){if(openThreeAxis(b,index,dx,dy)&&++count>=2)return true;}return false;}
+// When a new black stone creates a four-in-five threat (including a broken four),
+// that axis is a FOUR, not a THREE. Never count it again as an open three.
+function fourAxis(b,index,dx,dy){
+  const x=index%15,y=Math.floor(index/15);
+  for(let t=-4;t<=4;t++){
+    if(t===0)continue;
+    const xx=x+t*dx,yy=y+t*dy;
+    if(!inside(xx,yy)||b[yy*15+xx]!==0)continue;
+    b[yy*15+xx]=1;
+    const before=countDir(b,xx,yy,-dx,-dy,1),after=countDir(b,xx,yy,dx,dy,1);
+    b[yy*15+xx]=0;
+    // The completed line must be EXACTLY five and include the newly placed stone.
+    if(before+after+1===5 && -before<=-t && -t<=after)return true;
+  }
+  return false;
+}
+function doubleThree(b,index){
+  if(b[index]!==1)return false;
+  let count=0;
+  for(const [dx,dy] of directions){
+    if(fourAxis(b,index,dx,dy))continue;
+    if(openThreeAxis(b,index,dx,dy)&&++count>=2)return true;
+  }
+  return false;
+}
 function onlinePlayers(r){return r.players.every(p=>p?.ws?.readyState===WebSocket.OPEN);}
 function clockReset(r){r.deadline=!r.winner&&!r.draw&&!r.pendingUndo&&onlinePlayers(r)?now()+TURN_MS:null;}
 function clockPause(r){r.deadline=null;}
