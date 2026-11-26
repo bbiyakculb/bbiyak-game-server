@@ -1,4 +1,10 @@
 {
   "version": 1,
-  "records": []
+  "records": [
+    {
+      "name": "다나루",
+      "seconds": 74,
+      "at": "2026-11-26T03:45:25.399Z"
+    }
+  ]
 }
