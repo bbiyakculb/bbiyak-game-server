@@ -27,7 +27,7 @@ function settle(r){r.rolling=false;clearInterval(r.timer);r.timer=null;for(const
 function physicsTick(r){const dt=1.4,substeps=3,step=dt/substeps;let collided=false,fallen=false;
  for(let sub=0;sub<substeps;sub++){
  const active=r.pieces.filter(p=>p.alive);
- for(const p of active){p.x+=p.vx*step;p.y+=p.vy*step;const friction=Math.pow(.980,step);p.vx*=friction;p.vy*=friction;if(Math.hypot(p.vx,p.vy)<.08){p.vx=0;p.vy=0;}if(p.x<OUT.l-p.r||p.x>OUT.r+p.r||p.y<OUT.t-p.r||p.y>OUT.b+p.r){p.alive=false;p.vx=p.vy=0;fallen=true;}}
+ for(const p of active){p.x+=p.vx*step;p.y+=p.vy*step;const friction=Math.pow(.980,step);p.vx*=friction;p.vy*=friction;if(Math.hypot(p.vx,p.vy)<.08){p.vx=0;p.vy=0;}if(p.x<=OUT.l||p.x>=OUT.r||p.y<=OUT.t||p.y>=OUT.b){p.alive=false;p.vx=p.vy=0;fallen=true;}}
  const a=r.pieces.filter(p=>p.alive);
  for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++){
  const p=a[i],q=a[j],dx=q.x-p.x,dy=q.y-p.y,d=Math.hypot(dx,dy)||.0001,min=p.r+q.r;
@@ -41,9 +41,11 @@ function physicsTick(r){const dt=1.4,substeps=3,step=dt/substeps;let collided=fa
  if(mover===p)q.chain=Math.max(q.chain,p.chain+1);else p.chain=Math.max(p.chain,q.chain+1);
  }
  }
+ // 충돌 위치 보정으로 중앙이 판 경계를 넘어간 말도 즉시 탈락 처리
+ for(const p of r.pieces){if(p.alive&&(p.x<=OUT.l||p.x>=OUT.r||p.y<=OUT.t||p.y>=OUT.b)){p.alive=false;p.vx=p.vy=0;fallen=true;}}
  }
  r.simSteps++;if(collided&&r.simSteps-r.lastHitStep>7){r.lastHitStep=r.simSteps;for(const w of peers(r))send(w,{type:'alk_sfx',kind:'hit'});}if(fallen)for(const w of peers(r))send(w,{type:'alk_sfx',kind:'fall'});
- if(r.simSteps%2===0)publish(r);
+ if(fallen||r.simSteps%2===0)publish(r);
  const moving=r.pieces.some(p=>p.alive&&Math.hypot(p.vx,p.vy)>.18);
  if(!moving)r.stillSteps++;else r.stillSteps=0;
  if(r.stillSteps>12||r.simSteps>650)settle(r);
