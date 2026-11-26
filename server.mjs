@@ -1,3 +1,4 @@
+import {isAlkkagiMessage,handleAlkkagiMessage,detachAlkkagi,tickAlkkagi} from './alkkagi_online.mjs';
 import {handleGalagaHttp} from './galaga_scores.mjs';
 import {isBoardMessage,handleBoardMessage,detachBoard,tickBoard} from './board_games.mjs';
 import http from 'node:http';
@@ -191,7 +192,7 @@ const server=http.createServer(async(req,res)=>{
 });
 const wss=new WebSocketServer({server,maxPayload:4096,verifyClient:info=>!ORIGIN||info.origin===ORIGIN||!info.origin});
 wss.on('connection',ws=>{ws.isAlive=true;ws.meta=null;ws.on('pong',()=>ws.isAlive=true);ws.on('message',raw=>{try{
-  let data=JSON.parse(raw.toString());if(!data||typeof data.type!=='string')return;if(isBoardMessage(ws,data)){handleBoardMessage(ws,data);return;}
+  let data=JSON.parse(raw.toString());if(!data||typeof data.type!=='string')return;if(isAlkkagiMessage(ws,data)){handleAlkkagiMessage(ws,data);return;}if(isBoardMessage(ws,data)){handleBoardMessage(ws,data);return;}
   if(data.type==='create'){const r=makeRoom();join(ws,r,safeName(data.name||'선수1'),null,data.color===2?2:1);return;}
   if(data.type==='join'){let id=String(data.room||'').trim().toUpperCase();const r=rooms.get(id);if(!r)throw new Error('존재하지 않거나 종료된 방입니다.');join(ws,r,safeName(data.name||(data.spectator?'관전자':'선수2')),typeof data.token==='string'?data.token:null,data.spectator?'spectator':'player');return;}
   if(data.type==='leave'){detach(ws);send(ws,{type:'left'});return;}
@@ -217,8 +218,8 @@ wss.on('connection',ws=>{ws.isAlive=true;ws.meta=null;ws.on('pong',()=>ws.isAliv
       broadcast(r,{type:'notice',message:'재대결이 시작되었습니다. 흑돌부터 두세요.'});
     }publish(r);return;}
   if(data.type==='chat'){const message=String(data.message||'').trim().slice(0,120);if(message)broadcast(r,{type:'chat',name:typeof seat==='number'?r.players[seat-1]?.name:(meta.name||'관전자'),message});return;}
-}catch(e){error(ws,e?.message||'처리 중 오류가 발생했습니다.');}});ws.on('close',()=>{detach(ws);detachBoard(ws);});ws.on('error',()=>{});});
-const clockInterval=setInterval(()=>{for(const r of rooms.values())expireTurn(r);tickBoard();},250);
+}catch(e){error(ws,e?.message||'처리 중 오류가 발생했습니다.');}});ws.on('close',()=>{detach(ws);detachBoard(ws);detachAlkkagi(ws);});ws.on('error',()=>{});});
+const clockInterval=setInterval(()=>{for(const r of rooms.values())expireTurn(r);tickBoard();tickAlkkagi();},250);
 const interval=setInterval(()=>{for(const ws of wss.clients){if(!ws.isAlive){ws.terminate();continue;}ws.isAlive=false;ws.ping();}for(const [ticket,t] of tickets){if(now()-t.started>14400000)tickets.delete(ticket);}for(const [ip,v] of rate){if(now()-v.since>2*minute)rate.delete(ip);}for(const [id,r] of rooms){if(!sockets(r).some(ws=>ws.readyState===WebSocket.OPEN)&&now()-r.updated>ROOM_TTL)rooms.delete(id);}},CLEAN_INTERVAL);
 server.listen(PORT,'0.0.0.0',()=>console.log(`삐약 오목 서버: ${PORT}`));
 process.on('SIGTERM',()=>{clearInterval(interval);clearInterval(clockInterval);wss.close();server.close(()=>process.exit(0));setTimeout(()=>process.exit(0),3000).unref();});
