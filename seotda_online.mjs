@@ -14,14 +14,16 @@ const timer=(r,ms,fn)=>{clearTimeout(r.timer);let tag=++r.tag;r.timer=setTimeout
 function makeRoom(){let id;do{id=randCode()}while(rooms.has(id));const r={id,players:[],watchers:new Set(),started:false,phase:'lobby',round:0,pot:0,deck:[],turn:-1,pending:[],highest:0,starter:0,nextStarter:0,tiePlayers:[],tieCount:0,lastRaiser:-1,actionCount:0,serial:0,winner:[],elimination:[],ranking:[],deadline:0,timer:null,tag:0,updated:now(),notice:'방장이 2~5명 입장 후 게임을 시작할 수 있습니다.',hostToken:null};rooms.set(id,r);return r;}
 const allSockets=r=>[...r.players.map(p=>p.ws).filter(Boolean),...r.watchers];
 function playerView(p,i,r,viewer){
-  const showdown=['result','finished'].includes(r.phase),tie=['tieannounce','tiebet'].includes(r.phase);
+  const showdown=['result','finished'].includes(r.phase);
+  const tie=['tieannounce','tiedeal','tiebet'].includes(r.phase);
+  const lastResult=r.phase==='tieannounce';
   return {index:i,name:p.name,connected:!!p.ws&&p.ws.readyState===WebSocket.OPEN,host:p.token===r.hostToken,
     chips:p.chips,folded:p.folded,allin:p.allin,eliminated:p.eliminated,winner:r.winner.includes(i),
     tied:tie&&r.tiePlayers.includes(i),stagePaid:p.stagePaid,message:p.message,messageSerial:p.messageSerial,
-    hand:(showdown||tie)&&!p.folded?p.hand[1]:'',
+    hand:(showdown||lastResult||viewer===i&&r.phase==='tiebet')&&!p.folded?p.hand[1]:'',
     cards:[0,1].map(j=>{
       const c=p.cards[j];if(!c||(!p.firstDealt&&j===0)||(!p.secondDealt&&j===1))return null;
-      if(tie||showdown||j===0||viewer===i&&p.secondDealt)return {m:c.m,k:c.k,row:c.row,col:c.col};
+      if(showdown||lastResult||j===0||viewer===i&&p.secondDealt)return {m:c.m,k:c.k,row:c.row,col:c.col};
       return {hidden:true};
     })};
 }
@@ -49,10 +51,8 @@ function showdown(r,indices){
  const best=Math.max(...indices.map(i=>r.players[i].hand[0]));
  const assassins=indices.filter(i=>r.players[i].hand[1]==='암행어사');
  if(best===900&&assassins.length)return {winners:assassins,reason:'암행어사가 광땡을 잡았습니다!'};
- for(const kind of ['멍구사','사구'])for(const i of indices){if(r.players[i].hand[1]!==kind)continue;
-  const other=indices.filter(x=>x!==i),v=Math.max(...other.map(x=>r.players[x].hand[0]));
-  if(v<=(kind==='멍구사'?609:520))return {rematch:true,winners:indices,reason:`${kind} 발동! 생존자 전원 재승부`};
- }
+ // 삐약 클럽 규칙: 사구·멍구사도 전체 참가자 재경기를 강제하지 않습니다.
+ // 무승부 재승부는 실제 최고 족보가 동률인 선수에게만 적용합니다.
  const winners=indices.filter(i=>r.players[i].hand[0]===best);
  return winners.length>1?{rematch:true,winners,reason:'같은 족보 무승부'}:{winners};
 }
