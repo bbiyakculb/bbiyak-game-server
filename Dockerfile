@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 COPY server.mjs board_games.mjs chess_rules.mjs janggi_rules.mjs galaga_scores.mjs ./
-COPY alkkagi_online.mjs ./
+COPY alkkagi_online.mjs seotda_online.mjs ./
 ENV PORT=8000
 EXPOSE 8000
 CMD ["npm", "start"]
