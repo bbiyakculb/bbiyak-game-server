@@ -171,7 +171,7 @@ export function handleSeotdaMessage(ws,d){try{
   detach(ws);const token=String(d.token||'');const existing=r.players.findIndex(p=>p.token===token&&token);
   if(existing>=0){const p=r.players[existing];if(p.ws&&p.ws!==ws){send(p.ws,{type:'seotda_notice',message:'같은 계정으로 재접속되었습니다.'});p.ws.seotda=null;p.ws.close();}p.ws=ws;sendJoin(ws,r,'player',existing,p.token);return;}
   if(d.spectator||r.started||r.players.length>=5){r.watchers.add(ws);sendJoin(ws,r,'spectator',-1,null);return;}
-  const name=safeName(d.name);if(!name)throw Error('닉네임을 입력해 주세요.');if(r.players.some(p=>p.name===name))throw Error('이미 사용 중인 닉네임입니다.');
+  const name=safeName(d.name)||`선수${r.players.length+1}`;if(r.players.some(p=>p.name===name))throw Error('이미 사용 중인 닉네임입니다. 다른 닉네임을 입력해 주세요.');
   const key=crypto.randomBytes(24).toString('hex');r.players.push({name,token:key,ws,chips:1000,eliminated:false,folded:false,allin:false,hand:[0,''],cards:[],firstDealt:false,secondDealt:false,stagePaid:0,totalPaid:0,message:'',messageSerial:0});sendJoin(ws,r,'player',r.players.length-1,key);return;
  }
  if(d.type==='seotda_leave'){detach(ws);send(ws,{type:'seotda_left'});return;}
