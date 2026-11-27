@@ -91,7 +91,7 @@ function finishStage(r){r.pending=[];r.turn=-1;r.deadline=0;
  }
  if(r.phase==='bet2'||r.phase==='tiebet'){
   r.phase='showdown';publish(r);
-  timer(r,3000,()=>resolve(r));
+  timer(r,5000,()=>resolve(r));
  }
 }
 function resolve(r){const result=showdown(r,actors(r));
