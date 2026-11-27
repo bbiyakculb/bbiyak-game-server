@@ -41,18 +41,13 @@ function handRank(cs){if(cs.length<2)return [0,''];let a=cs[0],b=cs[1],lo=Math.m
  if(g&&lo===1&&(hi===3||hi===8))return [900,`1${hi}광땡`];
  if(a.m===b.m)return [600+a.m,a.m===10?'장땡':`${a.m}땡`];
  const has=(m1,m2)=>lo===m1&&hi===m2;
- if(has(4,9)){const special=a.k===1&&b.k===1;return [(a.m+b.m)%10,special?'멍구사':'사구'];}
- if(has(4,7)&&a.k===1&&b.k===1)return [1,'암행어사'];
  for(const [x,y,v,n] of [[1,2,520,'알리'],[1,4,510,'독사'],[1,9,500,'구삥'],[1,10,490,'장삥'],[4,10,480,'장사'],[4,6,470,'세륙']])if(has(x,y))return [v,n];
  const n=(a.m+b.m)%10;return [n,n===9?'갑오':n===0?'망통':`${n}끗`];
 }
 function showdown(r,indices){
  if(indices.length===1)return {winners:indices};
  const best=Math.max(...indices.map(i=>r.players[i].hand[0]));
- const assassins=indices.filter(i=>r.players[i].hand[1]==='암행어사');
- if(best===900&&assassins.length)return {winners:assassins,reason:'암행어사가 광땡을 잡았습니다!'};
- // 삐약 클럽 규칙: 사구·멍구사도 전체 참가자 재경기를 강제하지 않습니다.
- // 무승부 재승부는 실제 최고 족보가 동률인 선수에게만 적용합니다.
+ // 특수패 승부 규칙 없음: 최고 족보가 동일한 경우만 재승부.
  const winners=indices.filter(i=>r.players[i].hand[0]===best);
  return winners.length>1?{rematch:true,winners,reason:'같은 족보 무승부'}:{winners};
 }
